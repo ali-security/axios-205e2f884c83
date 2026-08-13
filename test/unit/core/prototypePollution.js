@@ -26,6 +26,7 @@ describe("Prototype Pollution Protection", function () {
     delete Object.prototype.response;
     delete Object.prototype.customProp;
     delete Object.prototype.headers;
+    delete Object.prototype.validateStatus;
   });
 
   describe("utils.merge", function () {
@@ -300,6 +301,54 @@ describe("Prototype Pollution Protection", function () {
         result.headers.common["Content-Type"],
         "application/json",
       );
+    });
+  });
+
+  // GHSA-w9j2-pvgh-6h63: mergeDirectKeys must not inherit validateStatus from
+  // Object.prototype (was using the `in` operator which traverses the chain).
+  describe("GHSA-w9j2-pvgh-6h63 validateStatus merge", function () {
+    it("should not inherit a polluted validateStatus during mergeConfig", function () {
+      Object.prototype.validateStatus = function () {
+        return true;
+      };
+
+      const merged = mergeConfig(defaults, { url: "/x" });
+
+      assert.strictEqual(merged.validateStatus, defaults.validateStatus);
+    });
+
+    it("should keep 4xx/5xx responses rejected when Object.prototype.validateStatus is polluted", async function () {
+      this.timeout(10000);
+
+      Object.prototype.validateStatus = function () {
+        return true;
+      };
+
+      const server = http.createServer(function (req, res) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end('{"error":"unauthorized"}');
+      });
+
+      await new Promise(function (resolve) {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+
+      const port = server.address().port;
+
+      try {
+        let threw = false;
+        try {
+          await axios.get(`http://127.0.0.1:${port}/`);
+        } catch (err) {
+          threw = true;
+          assert.strictEqual(err.response.status, 401);
+        }
+        assert.strictEqual(threw, true);
+      } finally {
+        await new Promise(function (resolve) {
+          server.close(resolve);
+        });
+      }
     });
   });
 
